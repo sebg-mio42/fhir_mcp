@@ -75,7 +75,7 @@ async def search_codes(
         ]
         raise ValueError(
             f"Free-text search is not supported for system {system_url!r} "
-            f"on tx.fhir.org. Supported systems: {', '.join(supported)}. "
+            f"on {settings.terminology_base_url}. Supported systems: {', '.join(supported)}. "
             "Use lookup_code for exact code lookup instead."
         )
 

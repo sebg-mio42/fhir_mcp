@@ -6,7 +6,7 @@ Registers four MCP tools:
   - translate_code   — translate a code across systems via ConceptMap/$translate
   - expand_valueset  — expand any FHIR ValueSet, optionally filtered
 
-Transport is selected via the MCP_TRANSPORT env var (default: stdio).
+Transport is selected via the MCP_TRANSPORT env var: stdio (default) or http (Streamable HTTP at /mcp).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import structlog
 from fhir_mcp_shared.langfuse import trace as lf_trace
 from fhir_mcp_shared.logging import configure_logging
 from mcp.server import Server
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -36,7 +37,7 @@ _SESSION_ID: str = str(uuid.uuid4())
 
 
 def _build_server() -> Server:
-    server = Server("mcp-terminology")
+    server = Server("mcp-terminology", version="1.0.0")
 
     @server.list_tools()  # type: ignore
     async def list_tools() -> list[Tool]:
@@ -129,7 +130,7 @@ def _build_server() -> Server:
                 name="expand_valueset",
                 description=(
                     "Expand a FHIR ValueSet to retrieve all (or filtered) codes it contains. "
-                    "Accepts any canonical ValueSet URL hosted on tx.fhir.org. "
+                    f"Accepts any canonical ValueSet URL hosted on {settings.terminology_base_url}. "
                     "Useful for exploring allowed values for coded FHIR elements."
                 ),
                 inputSchema={
@@ -225,8 +226,6 @@ def _build_server() -> Server:
 
 
 async def _run_stdio(server: Server) -> None:
-    from mcp.server.lowlevel.server import NotificationOptions
-
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -242,44 +241,29 @@ async def _run_stdio(server: Server) -> None:
         )
 
 
-async def _run_sse(server: Server) -> None:
-    """Run the server in SSE mode (HTTP + Server-Sent Events)."""
-    try:
-        import uvicorn
-        from mcp.server.sse import SseServerTransport
-        from starlette.applications import Starlette
-        from starlette.routing import Mount, Route
-    except ImportError as exc:
-        raise RuntimeError(
-            "SSE transport requires 'uvicorn' and 'starlette'. "
-            "Install with: pip install uvicorn starlette"
-        ) from exc
+async def _run_http(server: Server) -> None:
+    """Run the server over Streamable HTTP at /mcp."""
+    import contextlib
 
-    sse = SseServerTransport("/messages/")
+    import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Route
 
-    async def handle_sse(request):  # type: ignore[no-untyped-def]
-        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-            await server.run(
-                streams[0],
-                streams[1],
-                InitializationOptions(
-                    server_name="mcp-terminology",
-                    server_version="1.0.0",
-                    capabilities=server.get_capabilities(
-                        notification_options=None,  # type: ignore[arg-type]
-                        experimental_capabilities={},
-                    ),
-                ),
-            )
+    # ponytail: stateless — tools only, no server-initiated messages, and restarts drop no sessions
+    manager = StreamableHTTPSessionManager(app=server, stateless=True)
 
-    starlette_app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse.handle_post_message),
-        ]
-    )
+    class _Endpoint:  # a class, so Starlette hands it raw ASGI instead of wrapping it as a request handler
+        async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+            await manager.handle_request(scope, receive, send)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):  # type: ignore[no-untyped-def]
+        async with manager.run():
+            yield
+
     config = uvicorn.Config(
-        app=starlette_app,
+        app=Starlette(routes=[Route("/mcp", endpoint=_Endpoint())], lifespan=lifespan),
         host=settings.mcp_host,
         port=settings.mcp_port,
         log_level=settings.log_level.lower(),
@@ -296,8 +280,8 @@ def main() -> None:
         session_id=_SESSION_ID,
     )
     server = _build_server()
-    if settings.mcp_transport == "sse":
-        anyio.run(_run_sse, server)
+    if settings.mcp_transport == "http":
+        anyio.run(_run_http, server)
     else:
         anyio.run(_run_stdio, server)
 

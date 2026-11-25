@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,12 +23,13 @@ class Settings(BaseSettings):
     )
 
     # MCP transport
-    mcp_transport: str = Field(
+    # Literal: a leftover MCP_TRANSPORT=sse fails at startup instead of silently falling back to stdio
+    mcp_transport: Literal["stdio", "http"] = Field(
         default="stdio",
-        description="MCP transport: 'stdio' (Claude Desktop) or 'sse'.",
+        description="MCP transport: 'stdio' (Claude Desktop) or 'http' (Streamable HTTP at /mcp).",
     )
     mcp_host: str = Field(default="0.0.0.0")  # noqa: S104
-    mcp_port: int = Field(default=8001, description="Port for SSE transport.")
+    mcp_port: int = Field(default=8001, description="Port for HTTP transport.")
 
     # Observability
     log_level: str = Field(default="INFO")

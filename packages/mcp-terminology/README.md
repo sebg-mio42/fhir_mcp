@@ -47,8 +47,8 @@ uv sync --all-packages
 # Run (stdio mode — for Claude Desktop)
 uv run mcp-terminology
 
-# Run with SSE transport (port 8001)
-MCP_TRANSPORT=sse uv run mcp-terminology
+# Run with Streamable HTTP transport (http://localhost:8001/mcp)
+MCP_TRANSPORT=http uv run mcp-terminology
 ```
 
 ---
