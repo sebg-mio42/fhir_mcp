@@ -222,7 +222,6 @@ def test_validate_code_values_keep_false_result() -> None:
 
 def test_error_text_prefers_operation_outcome() -> None:
     import httpx
-
     from mcp_terminology.server import _error_text
 
     req = httpx.Request("GET", "https://tx.example/r4/CodeSystem/$lookup")
