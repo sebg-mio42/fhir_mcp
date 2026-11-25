@@ -27,8 +27,7 @@ async def expand_valueset(
     """Expand a FHIR ValueSet and return its codes, optionally filtered.
 
     Calls ``ValueSet/$expand`` on the terminology server. Works with any
-    ValueSet that ``tx.fhir.org`` hosts, including US Core, SNOMED,
-    LOINC, and FHIR-defined ValueSets.
+    ValueSet the server hosts.
 
     Args:
         url:         Canonical ValueSet URL
@@ -47,6 +46,8 @@ async def expand_valueset(
     params: dict[str, str] = {"url": safe_url, "count": str(n)}
     if safe_filter:
         params["filter"] = safe_filter
+    if settings.terminology_display_language:
+        params["displayLanguage"] = settings.terminology_display_language
 
     endpoint = f"{settings.terminology_base_url.rstrip('/')}/ValueSet/$expand"
 

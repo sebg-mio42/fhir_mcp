@@ -109,9 +109,10 @@ def _programmatic_check(case: GoldenCase, result: dict[str, Any]) -> tuple[bool,
         checks.append((ok, f"first code={first_code!r}, expected {exp['first_contains_code']!r}"))
 
     if "total_gte" in exp:
-        total = result.get(
-            "total", result.get("returned", len(result.get("results", result.get("codes", []))))
-        )
+        # filtered expansions usually omit total, so the key is present with None
+        total = result.get("total")
+        if total is None:
+            total = result.get("returned", len(result.get("results", result.get("codes", []))))
         ok = int(total) >= int(exp["total_gte"])
         checks.append((ok, f"total={total} (expected >= {exp['total_gte']})"))
 

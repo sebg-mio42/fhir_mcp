@@ -1,7 +1,7 @@
 """Tool: search_codes — free-text search within a terminology system.
 
-Uses the FHIR $expand operation on the system's implicit ValueSet:
-    GET {base}/ValueSet/$expand?url={valueset_url}&filter={query}&count={n}
+Uses the FHIR $expand operation on an inline ValueSet that includes the whole system:
+    POST {base}/ValueSet/$expand  (Parameters: valueSet, filter, count)
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import httpx
 import structlog
 from fhir_mcp_shared.langfuse import span
 
-from mcp_terminology.constants import SYSTEM_DISPLAY, SYSTEM_VALUESET
+from mcp_terminology.constants import SYSTEM_DISPLAY
 from mcp_terminology.settings import settings
 from mcp_terminology.validation import (
     resolve_system,
@@ -48,15 +48,13 @@ async def search_codes(
 ) -> dict[str, Any]:
     """Search for codes by free text within a terminology system.
 
-    Calls ``ValueSet/$expand`` with a ``filter`` parameter on the implicit
-    ValueSet for the given system. Systems with broad ValueSets (LOINC,
-    SNOMED CT, RxNorm) are fully supported. ICD-10 and other systems without
-    an implicit ValueSet on ``tx.fhir.org`` will return a ``not_supported``
-    error with guidance.
+    Calls ``ValueSet/$expand`` with a ``filter`` on an inline ValueSet that
+    includes every code of the given system, so any code system the server
+    hosts can be searched. A system the server lacks fails with its error.
 
     Args:
         query:       Free-text search string (e.g. ``"body height"``, ``"diabetes"``).
-        system:      System alias or URI (e.g. ``"loinc"``, ``"snomed"``, ``"rxnorm"``).
+        system:      System alias or URI (e.g. ``"loinc"``, ``"snomed"``, ``"icd-10-gm"``).
         max_results: Maximum codes to return (1-100). 0 = use server default.
 
     Returns:
@@ -68,33 +66,36 @@ async def search_codes(
     if not safe_query:
         raise ValueError("query must not be empty")
 
-    valueset_url = SYSTEM_VALUESET.get(system_url)
-    if not valueset_url:
-        supported = [
-            k for k, v in {a: resolve_system(a) for a in ["loinc", "snomed", "rxnorm"]}.items()
-        ]
-        raise ValueError(
-            f"Free-text search is not supported for system {system_url!r} "
-            f"on {settings.terminology_base_url}. Supported systems: {', '.join(supported)}. "
-            "Use lookup_code for exact code lookup instead."
-        )
-
     n = validate_max_results(max_results or settings.terminology_max_results)
-    params: dict[str, str | int] = {
-        "url": valueset_url,
-        "filter": safe_query,
-        "count": n,
-    }
+    parameters: list[dict[str, Any]] = [
+        {
+            "name": "valueSet",
+            "resource": {
+                "resourceType": "ValueSet",
+                "status": "active",
+                "compose": {"include": [{"system": system_url}]},
+            },
+        },
+        {"name": "filter", "valueString": safe_query},
+        {"name": "count", "valueInteger": n},
+    ]
+    if settings.terminology_display_language:
+        parameters.append(
+            {"name": "displayLanguage", "valueCode": settings.terminology_display_language}
+        )
 
     url = f"{settings.terminology_base_url.rstrip('/')}/ValueSet/$expand"
 
     with span("search_codes", system=system_url, query=safe_query, max_results=n):
         log.info("search_codes", url=url, system=system_url, query=safe_query)
         async with httpx.AsyncClient(timeout=settings.terminology_timeout_s) as client:
-            response = await client.get(
+            response = await client.post(
                 url,
-                params={k: str(v) for k, v in params.items()},
-                headers={"Accept": "application/fhir+json"},
+                json={"resourceType": "Parameters", "parameter": parameters},
+                headers={
+                    "Accept": "application/fhir+json",
+                    "Content-Type": "application/fhir+json",
+                },
             )
             response.raise_for_status()
             valueset: dict[str, Any] = response.json()

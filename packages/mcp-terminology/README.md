@@ -18,14 +18,24 @@ backed by the free public FHIR R4 terminology server (tx.fhir.org/r4).
 | Tool | Description | Backend operation |
 |------|-------------|-------------------|
 | `lookup_code` | Look up a single code — returns display, definition, designations | `CodeSystem/$lookup` |
-| `search_codes` | Free-text search within LOINC, SNOMED CT, or RxNorm | `ValueSet/$expand?filter=` |
-| `translate_code` | Translate a code across systems (SNOMED ↔ ICD-10-CM, etc.) | `ConceptMap/$translate` |
+| `validate_code` | Check a code exists (optionally its display), or is a member of a ValueSet | `CodeSystem/$validate-code`, `ValueSet/$validate-code` |
+| `search_codes` | Free-text search within any code system the server hosts | `ValueSet/$expand` (inline ValueSet, `filter`) |
+| `translate_code` | Translate a code across systems where the server holds a ConceptMap | `ConceptMap/$translate` |
 | `expand_valueset` | Expand any canonical FHIR ValueSet by URL | `ValueSet/$expand` |
 
-### Supported systems for `lookup_code`
+Which code systems and ConceptMaps exist depends on the server (`TERMINOLOGY_BASE_URL`); see its
+`/metadata?mode=terminology`. Set `TERMINOLOGY_DISPLAY_LANGUAGE` (e.g. `de`) to get displays in that
+language where the server has them.
+
+### System aliases
+
+Any code system can be passed by canonical URI; these aliases are shortcuts.
 
 | Alias | URI |
 |-------|-----|
+| `icd-10-gm` | `http://fhir.de/CodeSystem/bfarm/icd-10-gm` |
+| `ops` | `http://fhir.de/CodeSystem/bfarm/ops` |
+| `atc` / `atc-gm` | `http://www.whocc.no/atc` / `http://fhir.de/CodeSystem/bfarm/atc` |
 | `loinc` | `http://loinc.org` |
 | `snomed` / `snomed-ct` | `http://snomed.info/sct` |
 | `rxnorm` | `http://www.nlm.nih.gov/research/umls/rxnorm` |
@@ -95,13 +105,21 @@ MCP_TRANSPORT=http uv run mcp-terminology
 }
 ```
 
-### Translate SNOMED → ICD-10-CM
+### Translate administrative-gender → HL7 v2
 ```json
 {
-  "code": "73211009",
-  "source_system": "snomed",
-  "target_system": "icd-10-cm"
+  "code": "male",
+  "source_system": "http://hl7.org/fhir/administrative-gender",
+  "target_system": "http://terminology.hl7.org/CodeSystem/v2-0001"
 }
+```
+
+### Check that a code exists
+```json
+{ "system": "loinc", "code": "8302-3" }
+```
+```json
+{ "result": false, "message": "Unknown code '8302-3' in the CodeSystem 'http://loinc.org' version '2.83'", ... }
 ```
 
 ### Expand a ValueSet
@@ -154,7 +172,7 @@ uv run python evals/mcp-terminology/run_eval.py --ci --threshold 0.85
 
 ## Security
 
-- **Input sanitization** on all parameters (regex allowlist on codes, http/https-only URLs, control-char stripping on filters)
+- **Input sanitization** on all parameters (length and control-char checks on codes, http/https-only URLs, control-char stripping on filters)
 - **Hard cap** of 100 results per query
 - **No PHI** — uses only synthetic/public code lookups
 - See `validation.py` for the full allowlist

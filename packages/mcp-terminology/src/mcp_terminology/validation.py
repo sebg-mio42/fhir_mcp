@@ -12,10 +12,6 @@ from urllib.parse import urlparse
 
 from mcp_terminology.constants import SYSTEM_ALIASES
 
-# FHIR codes: alphanumeric, hyphen, dot, underscore, colon, space, slash
-# (SNOMED uses pure numeric; LOINC uses digits + hyphen; ICD-10 uses alpha+digits+dot)
-_CODE_RE = re.compile(r"^[a-zA-Z0-9\-._:/ ]{1,128}$")
-
 # ValueSet / system URL: must be absolute HTTP(S)
 _HTTP_RE = re.compile(r"^https?://")
 
@@ -45,14 +41,16 @@ def validate_code(code: str) -> str:
     """Validate a FHIR code value.
 
     Raises:
-        ValueError: If the code contains unsafe characters or is too long.
+        ValueError: If the code contains control characters or is too long.
     """
     c = code.strip()
     if not c:
         raise ValueError("code must not be empty")
-    if not _CODE_RE.match(c):
+    # ponytail: codes only travel URL-encoded in query params, so no character allowlist;
+    # UCUM needs [ ] * % ' { } ( ) (e.g. mm[Hg], 10*3/uL, [arb'U])
+    if len(c) > 128 or _CONTROL_RE.search(c):
         raise ValueError(
-            f"Invalid code {c!r}. Codes must match [a-zA-Z0-9\\-._:/ ] (max 128 chars)."
+            f"Invalid code {c!r}. Codes must be at most 128 characters without control characters."
         )
     return c
 
