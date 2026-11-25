@@ -198,7 +198,11 @@ def test_parse_parameters_keeps_designation_language() -> None:
         }
     )
     assert parsed["designations"] == [
-        {"language": "de-DE", "use": "LONG_COMMON_NAME", "value": "Creatinin [Masse/Volumen] in Serum"}
+        {
+            "language": "de-DE",
+            "use": "LONG_COMMON_NAME",
+            "value": "Creatinin [Masse/Volumen] in Serum",
+        }
     ]
 
 
