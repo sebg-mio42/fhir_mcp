@@ -21,6 +21,11 @@ class Settings(BaseSettings):
         default=20,
         description="Default maximum results returned by search / expand operations.",
     )
+    terminology_display_language: str = Field(
+        default="",
+        description="displayLanguage (e.g. 'de') sent to $lookup, $expand and $validate-code; "
+        "empty = server default.",
+    )
 
     # MCP transport
     # Literal: a leftover MCP_TRANSPORT=sse fails at startup instead of silently falling back to stdio

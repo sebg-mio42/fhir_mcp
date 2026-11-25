@@ -1,7 +1,8 @@
 """mcp-terminology server entrypoint.
 
-Registers four MCP tools:
-  - lookup_code      — look up a single code (LOINC, SNOMED, RxNorm, ICD-10, …)
+Registers five MCP tools:
+  - lookup_code      — look up a single code (LOINC, SNOMED, ICD-10-GM, …)
+  - validate_code    — check a code exists, or is in a ValueSet, via $validate-code
   - search_codes     — free-text search within a terminology system
   - translate_code   — translate a code across systems via ConceptMap/$translate
   - expand_valueset  — expand any FHIR ValueSet, optionally filtered
@@ -16,6 +17,7 @@ import time
 import uuid
 
 import anyio
+import httpx
 import structlog
 from fhir_mcp_shared.langfuse import trace as lf_trace
 from fhir_mcp_shared.logging import configure_logging
@@ -25,15 +27,38 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from mcp_terminology.constants import SYSTEM_ALIASES
 from mcp_terminology.settings import settings
 from mcp_terminology.tools.expand_valueset import expand_valueset
 from mcp_terminology.tools.lookup_code import lookup_code
 from mcp_terminology.tools.search_codes import search_codes
 from mcp_terminology.tools.translate_code import translate_code
+from mcp_terminology.tools.validate_code import validate_code
 
 log = structlog.get_logger(__name__)
 
 _SESSION_ID: str = str(uuid.uuid4())
+
+_SYSTEM_PARAM = {
+    "type": "string",
+    "description": (
+        f"System alias ({', '.join(SYSTEM_ALIASES)}) "
+        "or canonical URI of any code system the server hosts."
+    ),
+}
+
+
+def _error_text(exc: Exception) -> str:
+    """The server's OperationOutcome text ('CodeSystem not found: …') over httpx's status line."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            issues = exc.response.json().get("issue") or []
+        except ValueError:
+            issues = []
+        texts = [(i.get("details") or {}).get("text") or i.get("diagnostics") for i in issues]
+        if any(texts):
+            return f"{exc.response.status_code}: " + " | ".join(t for t in texts if t)
+    return str(exc)
 
 
 def _build_server() -> Server:
@@ -47,18 +72,12 @@ def _build_server() -> Server:
                 description=(
                     "Look up a single code in a medical terminology system using FHIR $lookup. "
                     "Returns display name, definition, and alternate designations. "
-                    "Supports LOINC, SNOMED CT, RxNorm, ICD-10, ICD-10-CM, CVX, UCUM, NDC, CPT."
+                    "Works for any code system the terminology server hosts."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "system": {
-                            "type": "string",
-                            "description": (
-                                "System alias (e.g. 'loinc', 'snomed', 'rxnorm', 'icd-10-cm') "
-                                "or canonical URI (e.g. 'http://loinc.org')."
-                            ),
-                        },
+                        "system": _SYSTEM_PARAM,
                         "code": {
                             "type": "string",
                             "description": "The code to look up (e.g. '8302-2', '73211009').",
@@ -73,11 +92,37 @@ def _build_server() -> Server:
                 },
             ),
             Tool(
+                name="validate_code",
+                description=(
+                    "Check that a code exists in a code system (FHIR CodeSystem/$validate-code), "
+                    "or, if valueset_url is given, that it is allowed by that ValueSet "
+                    "(ValueSet/$validate-code). Use it to verify a code before relying on it. "
+                    "Returns result=true/false and a message explaining any problem."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "system": _SYSTEM_PARAM,
+                        "code": {"type": "string", "description": "The code to check."},
+                        "display": {
+                            "type": "string",
+                            "description": "Optional display text to check against the code.",
+                            "default": "",
+                        },
+                        "valueset_url": {
+                            "type": "string",
+                            "description": "Optional ValueSet URL to check membership in.",
+                            "default": "",
+                        },
+                    },
+                    "required": ["system", "code"],
+                },
+            ),
+            Tool(
                 name="search_codes",
                 description=(
-                    "Search for codes by free text within a terminology system. "
-                    "Uses FHIR ValueSet/$expand. "
-                    "Supported systems: loinc, snomed, rxnorm. "
+                    "Search for codes by free text within any code system the terminology "
+                    "server hosts. Uses FHIR ValueSet/$expand. "
                     "For exact code lookup use lookup_code instead."
                 ),
                 inputSchema={
@@ -87,10 +132,7 @@ def _build_server() -> Server:
                             "type": "string",
                             "description": "Free-text search (e.g. 'body height', 'diabetes mellitus').",
                         },
-                        "system": {
-                            "type": "string",
-                            "description": "System alias: 'loinc', 'snomed', or 'rxnorm'.",
-                        },
+                        "system": _SYSTEM_PARAM,
                         "max_results": {
                             "type": "integer",
                             "description": "Maximum codes to return (1-100). Default: 20.",
@@ -104,8 +146,9 @@ def _build_server() -> Server:
                 name="translate_code",
                 description=(
                     "Translate a code from one terminology system to another "
-                    "using FHIR ConceptMap/$translate. "
-                    "Common supported mappings: SNOMED ↔ ICD-10-CM, LOINC ↔ SNOMED, RxNorm ↔ NDC."
+                    "using FHIR ConceptMap/$translate. Only works where the server holds a "
+                    "ConceptMap between the two systems; otherwise returns result=false "
+                    "and a message."
                 ),
                 inputSchema={
                     "type": "object",
@@ -179,6 +222,13 @@ def _build_server() -> Server:
                         code=arguments["code"],
                         version=arguments.get("version", ""),
                     )
+                elif name == "validate_code":
+                    result = await validate_code(
+                        system=arguments["system"],
+                        code=arguments["code"],
+                        display=arguments.get("display", ""),
+                        valueset_url=arguments.get("valueset_url", ""),
+                    )
                 elif name == "search_codes":
                     result = await search_codes(
                         query=arguments["query"],
@@ -201,7 +251,7 @@ def _build_server() -> Server:
                     raise ValueError(f"Unknown tool: {name!r}")
 
                 latency_ms = round((time.perf_counter() - t0) * 1000, 1)
-                payload = json.dumps(result, indent=2)
+                payload = json.dumps(result, indent=2, ensure_ascii=False)
                 if tr:
                     tr.update(output={"response_bytes": len(payload), "latency_ms": latency_ms})
                 log.info(
@@ -215,12 +265,13 @@ def _build_server() -> Server:
 
             except Exception as exc:
                 latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+                error = _error_text(exc)
                 if tr:
-                    tr.update(output={"error": str(exc), "latency_ms": latency_ms})
+                    tr.update(output={"error": error, "latency_ms": latency_ms})
                 log.error(
-                    "tool_error", tool=name, call_id=call_id, latency_ms=latency_ms, error=str(exc)
+                    "tool_error", tool=name, call_id=call_id, latency_ms=latency_ms, error=error
                 )
-                return [TextContent(type="text", text=f"Error: {exc}")]
+                return [TextContent(type="text", text=f"Error: {error}")]
 
     return server
 

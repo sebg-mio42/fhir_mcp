@@ -1,7 +1,7 @@
 """Tool: translate_code — translate a code from one system to another.
 
 Uses the FHIR $translate operation:
-    GET {base}/ConceptMap/$translate?code={code}&system={src}&target={tgt}
+    GET {base}/ConceptMap/$translate?code={code}&system={src}&targetsystem={tgt}
 """
 
 from __future__ import annotations
@@ -22,12 +22,15 @@ log = structlog.get_logger(__name__)
 def _parse_translate_parameters(params: dict[str, Any]) -> dict[str, Any]:
     """Parse Parameters resource returned by $translate."""
     result_bool = False
+    message = ""
     matches: list[dict[str, str]] = []
 
     for p in params.get("parameter") or []:
         name = p.get("name", "")
         if name == "result":
             result_bool = bool(p.get("valueBoolean", False))
+        elif name == "message":
+            message = p.get("valueString", "")
         elif name == "match":
             match: dict[str, str] = {}
             for part in p.get("part") or []:
@@ -47,7 +50,7 @@ def _parse_translate_parameters(params: dict[str, Any]) -> dict[str, Any]:
             if match:
                 matches.append(match)
 
-    return {"result": result_bool, "matches": matches}
+    return {"result": result_bool, "message": message, "matches": matches}
 
 
 async def translate_code(
@@ -57,17 +60,17 @@ async def translate_code(
 ) -> dict[str, Any]:
     """Translate a code from one terminology system to another.
 
-    Uses the FHIR ``ConceptMap/$translate`` operation on ``tx.fhir.org``.
-    Well-supported mappings include SNOMED ↔ ICD-10, LOINC ↔ SNOMED, and
-    RxNorm ↔ NDC (where official ConceptMaps exist on the server).
+    Uses the FHIR ``ConceptMap/$translate`` operation. It only finds a
+    translation where the server holds a ConceptMap between the two systems;
+    otherwise ``result`` is false and ``message`` says why.
 
     Args:
-        code:           The source code (e.g. ``"73211009"`` for SNOMED diabetes).
-        source_system:  Source system alias or URI (e.g. ``"snomed"``).
-        target_system:  Target system alias or URI (e.g. ``"icd-10-cm"``).
+        code:           The source code (e.g. ``"male"``).
+        source_system:  Source system alias or URI.
+        target_system:  Target code system alias or URI (sent as ``targetsystem``).
 
     Returns:
-        Dict with ``result`` (bool), ``source_code``, ``source_system``,
+        Dict with ``result`` (bool), ``message``, ``source_code``, ``source_system``,
         ``target_system``, and ``matches`` (list of translated codes with
         ``code``, ``display``, ``equivalence``).
     """
@@ -78,7 +81,8 @@ async def translate_code(
     params: dict[str, str] = {
         "code": safe_code,
         "system": source_url,
-        "target": target_url,
+        # R4: "target" is a ValueSet; the target code system is "targetsystem"
+        "targetsystem": target_url,
     }
 
     url = f"{settings.terminology_base_url.rstrip('/')}/ConceptMap/$translate"
@@ -101,6 +105,7 @@ async def translate_code(
 
     return {
         "result": parsed["result"],
+        "message": parsed["message"],
         "source_code": safe_code,
         "source_system": source_url,
         "source_system_name": SYSTEM_DISPLAY.get(source_url, source_url),

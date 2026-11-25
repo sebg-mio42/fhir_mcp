@@ -53,6 +53,8 @@ def test_validate_code_ok() -> None:
     assert validate_code("8302-2") == "8302-2"
     assert validate_code("73211009") == "73211009"
     assert validate_code("E11.9") == "E11.9"
+    for ucum in ("mm[Hg]", "10*3/uL", "%", "[arb'U]", "{cells}/uL"):
+        assert validate_code(ucum) == ucum
 
 
 def test_validate_code_strips_whitespace() -> None:
@@ -61,11 +63,12 @@ def test_validate_code_strips_whitespace() -> None:
     assert validate_code("  8302-2  ") == "8302-2"
 
 
-def test_validate_code_rejects_injection() -> None:
+def test_validate_code_rejects_control_chars_and_overlong() -> None:
     from mcp_terminology.validation import validate_code
 
-    with pytest.raises(ValueError, match="Invalid code"):
-        validate_code("'; DROP TABLE--")
+    for bad in ("83\x0002-2", "83\n02-2", "1" * 129):
+        with pytest.raises(ValueError, match="Invalid code"):
+            validate_code(bad)
 
 
 def test_validate_code_rejects_empty() -> None:
@@ -110,14 +113,6 @@ def test_validate_max_results_clamps() -> None:
 
 
 # ── search_codes ─────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_search_codes_rejects_unsupported_system() -> None:
-    from mcp_terminology.tools.search_codes import search_codes
-
-    with pytest.raises(ValueError, match="not supported"):
-        await search_codes(query="heart failure", system="icd-10-cm")
 
 
 @pytest.mark.asyncio
@@ -182,7 +177,7 @@ async def test_lookup_code_rejects_bad_code() -> None:
     from mcp_terminology.tools.lookup_code import lookup_code
 
     with pytest.raises(ValueError, match="Invalid code"):
-        await lookup_code(system="loinc", code="'; DROP TABLE--")
+        await lookup_code(system="loinc", code="83\x0002-2")
 
 
 def test_parse_parameters_keeps_designation_language() -> None:
@@ -205,6 +200,39 @@ def test_parse_parameters_keeps_designation_language() -> None:
     assert parsed["designations"] == [
         {"language": "de-DE", "use": "LONG_COMMON_NAME", "value": "Creatinin [Masse/Volumen] in Serum"}
     ]
+
+
+# ── validate_code / error text ───────────────────────────────────────────────
+
+
+def test_validate_code_values_keep_false_result() -> None:
+    from mcp_terminology.tools.validate_code import _values
+
+    values = _values(
+        {
+            "parameter": [
+                {"name": "result", "valueBoolean": False},
+                {"name": "message", "valueString": "Unknown code '8302-3'"},
+                {"name": "issues", "resource": {"resourceType": "OperationOutcome"}},
+            ]
+        }
+    )
+    assert values == {"result": False, "message": "Unknown code '8302-3'"}
+
+
+def test_error_text_prefers_operation_outcome() -> None:
+    import httpx
+
+    from mcp_terminology.server import _error_text
+
+    req = httpx.Request("GET", "https://tx.example/r4/CodeSystem/$lookup")
+    outcome = {"issue": [{"details": {"text": "CodeSystem not found: x"}}]}
+    resp = httpx.Response(422, json=outcome, request=req)
+    assert _error_text(httpx.HTTPStatusError("422", request=req, response=resp)) == (
+        "422: CodeSystem not found: x"
+    )
+    html = httpx.Response(502, text="<html>", request=req)
+    assert _error_text(httpx.HTTPStatusError("boom", request=req, response=html)) == "boom"
 
 
 # ── integration (requires tx.fhir.org) ───────────────────────────────────────
@@ -239,3 +267,42 @@ async def test_expand_administrative_gender() -> None:
     codes = [c["code"] for c in result["codes"]]
     assert "male" in codes
     assert "female" in codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_search_icd10cm_without_a_predefined_valueset() -> None:
+    from mcp_terminology.tools.search_codes import search_codes
+
+    result = await search_codes(query="fracture", system="icd-10-cm", max_results=3)
+    assert any("fracture" in r["display"].lower() for r in result["results"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_translate_administrative_gender_to_v2() -> None:
+    from mcp_terminology.tools.translate_code import translate_code
+
+    result = await translate_code(
+        "male",
+        source_system="http://hl7.org/fhir/administrative-gender",
+        target_system="http://terminology.hl7.org/CodeSystem/v2-0001",
+    )
+    assert result["result"] is True
+    assert result["matches"][0]["code"] == "M"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_validate_code_unknown_loinc() -> None:
+    from mcp_terminology.tools.validate_code import validate_code
+
+    bad = await validate_code(system="loinc", code="8302-3")
+    assert bad["result"] is False
+    assert bad["message"]
+    good = await validate_code(
+        system="http://hl7.org/fhir/administrative-gender",
+        code="male",
+        valueset_url="http://hl7.org/fhir/ValueSet/administrative-gender",
+    )
+    assert good["result"] is True

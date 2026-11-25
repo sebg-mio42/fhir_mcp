@@ -1,7 +1,6 @@
 """Shared constants for mcp-terminology.
 
 System URI aliases map user-friendly names to canonical FHIR system URIs.
-ValueSet URIs map each system to a ValueSet suitable for $expand text search.
 """
 
 from __future__ import annotations
@@ -20,16 +19,10 @@ SYSTEM_ALIASES: dict[str, str] = {
     "cvx": "http://hl7.org/fhir/sid/cvx",
     "nucc": "http://nucc.org/provider-taxonomy",
     "ucum": "http://unitsofmeasure.org",
-}
-
-# ValueSet canonical URLs used by $expand for free-text search.
-# Only systems where tx.fhir.org supports free-text $expand are listed.
-SYSTEM_VALUESET: dict[str, str] = {
-    "http://loinc.org": "http://loinc.org/vs",
-    "http://snomed.info/sct": "http://snomed.info/sct?fhir_vs",
-    "http://www.nlm.nih.gov/research/umls/rxnorm": "http://www.nlm.nih.gov/research/umls/rxnorm",
-    "http://hl7.org/fhir/sid/cvx": "http://hl7.org/fhir/us/core/ValueSet/us-core-vaccines-cvx",
-    "http://unitsofmeasure.org": "http://hl7.org/fhir/ValueSet/ucum-bodylength",
+    "icd-10-gm": "http://fhir.de/CodeSystem/bfarm/icd-10-gm",
+    "ops": "http://fhir.de/CodeSystem/bfarm/ops",
+    "atc": "http://www.whocc.no/atc",
+    "atc-gm": "http://fhir.de/CodeSystem/bfarm/atc",
 }
 
 # Human-readable display names for known system URIs
@@ -44,4 +37,8 @@ SYSTEM_DISPLAY: dict[str, str] = {
     "http://www.ama-assn.org/go/cpt": "CPT",
     "http://hl7.org/fhir/sid/cvx": "CVX",
     "http://unitsofmeasure.org": "UCUM",
+    "http://fhir.de/CodeSystem/bfarm/icd-10-gm": "ICD-10-GM",
+    "http://fhir.de/CodeSystem/bfarm/ops": "OPS",
+    "http://www.whocc.no/atc": "ATC (WHO)",
+    "http://fhir.de/CodeSystem/bfarm/atc": "ATC (BfArM, German)",
 }

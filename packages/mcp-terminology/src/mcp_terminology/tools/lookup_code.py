@@ -80,6 +80,8 @@ async def lookup_code(
     params: dict[str, str] = {"system": system_url, "code": safe_code}
     if version:
         params["version"] = version[:50]
+    if settings.terminology_display_language:
+        params["displayLanguage"] = settings.terminology_display_language
 
     url = f"{settings.terminology_base_url.rstrip('/')}/CodeSystem/$lookup"
 
