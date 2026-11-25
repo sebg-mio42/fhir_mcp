@@ -29,7 +29,12 @@ def _parse_parameters(params: dict[str, Any]) -> dict[str, Any]:
             sub: dict[str, str] = {}
             for sp in p.get("part") or []:
                 sn = sp.get("name", "")
-                sv = sp.get("valueString") or sp.get("valueCoding", {}).get("display", "")
+                # language arrives as valueCode (e.g. "de-DE")
+                sv = (
+                    sp.get("valueString")
+                    or sp.get("valueCode")
+                    or sp.get("valueCoding", {}).get("display", "")
+                )
                 if sv:
                     sub[sn] = str(sv)
             if sub:

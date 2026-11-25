@@ -185,6 +185,28 @@ async def test_lookup_code_rejects_bad_code() -> None:
         await lookup_code(system="loinc", code="'; DROP TABLE--")
 
 
+def test_parse_parameters_keeps_designation_language() -> None:
+    from mcp_terminology.tools.lookup_code import _parse_parameters
+
+    parsed = _parse_parameters(
+        {
+            "parameter": [
+                {
+                    "name": "designation",
+                    "part": [
+                        {"name": "language", "valueCode": "de-DE"},
+                        {"name": "use", "valueCoding": {"display": "LONG_COMMON_NAME"}},
+                        {"name": "value", "valueString": "Creatinin [Masse/Volumen] in Serum"},
+                    ],
+                }
+            ]
+        }
+    )
+    assert parsed["designations"] == [
+        {"language": "de-DE", "use": "LONG_COMMON_NAME", "value": "Creatinin [Masse/Volumen] in Serum"}
+    ]
+
+
 # ── integration (requires tx.fhir.org) ───────────────────────────────────────
 
 
